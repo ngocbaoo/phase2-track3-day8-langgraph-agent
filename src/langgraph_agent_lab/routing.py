@@ -11,9 +11,13 @@ def route_after_classify(state: AgentState) -> str:
     TODO(student): handle unknown routes safely and update tests for edge cases.
     """
     route = state.get("route", Route.SIMPLE.value)
+    if route == Route.TOOL.value:
+        from langgraph.types import Send
+        # Parallel fan-out: run two tool nodes concurrently
+        return [Send("tool", state), Send("tool", state)]
+        
     mapping = {
         Route.SIMPLE.value: "answer",
-        Route.TOOL.value: "tool",
         Route.MISSING_INFO.value: "clarify",
         Route.RISKY.value: "risky_action",
         Route.ERROR.value: "retry",

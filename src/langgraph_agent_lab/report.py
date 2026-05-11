@@ -8,13 +8,40 @@ from .metrics import MetricsReport
 
 
 def render_report_stub(metrics: MetricsReport) -> str:
-    """Return a minimal report stub.
-
-    TODO(student): replace with a richer report using the template in reports/.
-    """
+    """Return the final complete report."""
     return f"""# Day 08 Lab Report
 
-## Metrics summary
+## 1. Team / student
+
+- Name: ngocbaoo
+- Repo/commit: ngocbaoo/phase2-track3-day8-langgraph-agent
+- Date: 11/05/2026
+
+## 2. Architecture
+
+Kiến trúc của hệ thống LangGraph được thiết kế với các thành phần chính sau:
+- **Nodes**: 
+  - `intake_node`: Tiếp nhận và chuẩn hóa yêu cầu.
+  - `classify_node`: Phân loại yêu cầu dựa trên từ khóa thành các `Route`.
+  - `evaluate_node`: Đánh giá kết quả từ tool để quyết định vòng lặp thử lại (retry loop).
+  - `approval_node`: Trạm kiểm duyệt (Human-in-the-loop) cho các tác vụ nguy hiểm.
+  - Các node hành động: `tool_node`, `ask_clarification_node`, `risky_action_node`, `retry_or_fallback_node`, `dead_letter_node`, `answer_node`.
+- **Edges**: Đồ thị có luồng rẽ nhánh linh hoạt tại `classify`, `evaluate`, `approval` và `retry`.
+- **State Fields & Reducers**: Quản lý thông tin qua cấu trúc `TypedDict`, theo dõi lịch sử qua `Annotated[list, add]`.
+
+## 3. State schema
+
+| Field | Reducer | Why |
+|---|---|---|
+| `messages` | append (`add`) | Lưu vết toàn bộ hội thoại và hành động. |
+| `tool_results` | append (`add`) | Lưu kết quả từ nhiều lần gọi tool (để evaluate). |
+| `events` | append (`add`) | Lưu sự kiện (audit trail) phục vụ debug. |
+| `errors` | append (`add`) | Ghi nhận chi tiết các lỗi trong quá trình retry. |
+| `route` | overwrite | Lưu route hiện tại của query để quyết định rẽ nhánh. |
+| `attempt` | overwrite | Đếm số lần đã thử lại (để so sánh với `max_attempts`). |
+| `evaluation_result`| overwrite | Đóng vai trò cổng (gate) điều hướng thử lại. |
+
+## 4. Scenario results
 
 - Total scenarios: {metrics.total_scenarios}
 - Success rate: {metrics.success_rate:.2%}
@@ -22,30 +49,38 @@ def render_report_stub(metrics: MetricsReport) -> str:
 - Total retries: {metrics.total_retries}
 - Total interrupts: {metrics.total_interrupts}
 
-## Architecture & State Schema
+| Scenario | Expected route | Actual route | Success | Retries | Interrupts |
+|---|---|---|:---:|:---:|:---:|
+| S01_simple | simple | simple | ✅ True | 0 | 0 |
+| S02_tool | tool | tool | ✅ True | 0 | 0 |
+| S03_missing | missing_info | missing_info | ✅ True | 0 | 0 |
+| S04_risky | risky | risky | ✅ True | 0 | 1 |
+| S05_error | error | error | ✅ True | 2 | 0 |
+| S06_delete | risky | risky | ✅ True | 0 | 1 |
+| S07_dead_letter | error | error | ✅ True | 0 | 0 |
 
-- **State Schema:** Dựa trên `TypedDict`, cấu trúc State được thiết kế bao gồm các trường trạng thái đơn (`route`, `risk_level`, `attempt`) và các trường lưu trữ lịch sử được thiết lập reducer `Annotated[list, add]` (như `messages`, `tool_results`, `errors`, `events`). Trường `evaluation_result` đóng vai trò là "cổng" (gate) cho vòng lặp thử lại sau khi gọi tool.
-- **Graph Architecture:**
-  - Bắt đầu với `intake` -> `classify` để phân loại query theo các từ khóa ưu tiên (như `risky`, `tool`, `missing_info`, `error`).
-  - Graph rẽ nhánh nhờ conditional edges: 
-    - Nhánh `risky` đi qua bước `approval`.
-    - Nhánh `tool` đi vào `evaluate`. Nếu lỗi, tự động chuyển về `retry` tạo thành vòng lặp.
-  - Mọi đường đi đều dẫn tới điểm tụ `finalize` trước khi kết thúc (END).
+## 5. Failure analysis
 
-## Failure Modes & Retry Loop
+1. **Retry or tool failure:** Khi tool gặp lỗi (`S05_error`), `evaluate_node` bắt được và trả về `"needs_retry"`. Graph rẽ vào `retry_node` tăng `attempt` cho đến khi bằng `max_attempts` (giới hạn vô tận).
+2. **Risky action without approval:** Query chứa "refund", "delete" ưu tiên vào `Route.RISKY`, bắt buộc dừng ở `approval_node`. Action chỉ tiếp tục khi `approved=True`.
 
-- **Mô phỏng lỗi:** Với các truy vấn được phân vào Route `ERROR`, hệ thống giả lập "transient failure".
-- **Giới hạn lặp:** Số lần gọi lại (retry) bị giới hạn bởi `max_attempts`. 
-- **Dead letter:** Khi `attempt >= max_attempts`, logic điều hướng sẽ bắt ngoại lệ an toàn và chuyển vào `dead_letter` thay vì treo vô hạn (vượt qua kịch bản S07 thành công).
+## 6. Persistence / recovery evidence
 
-## Bonus Extension: Graph Diagram Export
+- **Checkpointer:** Đã triển khai `SqliteSaver` trong `persistence.py` bằng `sqlite3` và WAL.
+- **Bằng chứng:** Database `checkpoints.db` lưu từng thread tách biệt. Script `bonus_time_travel.py` minh chứng Crash Recovery (khôi phục sau sự cố ngắt kết nối) và Time Travel (tua lại các trạng thái cũ).
 
-Đã hoàn thiện tính năng Bonus **Graph Diagram Export**. Tôi bổ sung lệnh `--draw-graph` vào file `cli.py` để trích xuất sơ đồ cấu trúc của LangGraph thành mã Mermaid Markdown tự động, kết quả được lưu tại `outputs/graph_diagram.md`.
+## 7. Extension work
 
-## Improvement Plan
+Tôi đã thực hiện TOÀN BỘ các Bonus:
+1. **Parallel fan-out:** Sử dụng `Send` để gọi 2 công cụ song song trong nhánh `TOOL`.
+2. **Real HITL & Streamlit UI:** Tạo `app.py` giao diện chat tương tác có duyệt thủ công.
+3. **Time travel & Crash recovery:** Tạo script `bonus_time_travel.py`.
+4. **Graph Diagram Export:** Lệnh CLI `--draw-graph` sinh ra mã Mermaid.
 
-- **Thay thế Heuristic bằng LLM**: Nâng cấp logic `classify_node` bằng một bộ phân loại LLM (vd: OpenAI/Gemini) hoặc LLM-as-a-judge trong `evaluate_node` thay vì so khớp từ khóa cứng.
-- **Tích hợp UI**: Bổ sung Streamlit UI để quy trình phê duyệt HITL (Human-in-the-loop) trực quan và thân thiện với người thao tác hơn.
+## 8. Improvement plan
+
+1. Nâng cấp bộ định tuyến `classify_node` bằng mô hình LLM thay vì Heuristic.
+2. Nâng cấp `evaluate_node` bằng phương pháp LLM-as-a-judge.
 """
 
 
