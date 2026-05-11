@@ -52,5 +52,18 @@ def validate_metrics(metrics: Annotated[Path, typer.Option("--metrics")]) -> Non
     typer.echo(f"Metrics valid. success_rate={report.success_rate:.2%}")
 
 
+@app.command("draw-graph")
+def draw_graph(output: Annotated[Path, typer.Option("--output", "-o")] = Path("outputs/graph_diagram.md")) -> None:
+    """Export the graph as a Mermaid diagram (Bonus)."""
+    graph = build_graph()
+    mermaid_text = graph.get_graph().draw_mermaid()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as f:
+        f.write("```mermaid\n")
+        f.write(mermaid_text)
+        f.write("\n```\n")
+    typer.echo(f"Wrote Mermaid diagram to {output}")
+
+
 if __name__ == "__main__":
     app()
